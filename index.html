@@ -267,14 +267,7 @@
       <div class="sec-title">All Products</div>
       <div class="sec-count" id="prodCount"></div>
     </div>
-    <div class="filters" id="filterBar">
-      <button class="filter-btn on" onclick="doFilter('all',this)">All</button>
-      <button class="filter-btn" onclick="doFilter('Weapons',this)">Weapons</button>
-      <button class="filter-btn" onclick="doFilter('Apparel',this)">Apparel</button>
-      <button class="filter-btn" onclick="doFilter('Tech',this)">Tech</button>
-      <button class="filter-btn" onclick="doFilter('Artifacts',this)">Artifacts</button>
-      <button class="filter-btn" onclick="doFilter('Potions',this)">Potions</button>
-    </div>
+
     <div class="grid" id="grid"></div>
   </div>
 
@@ -374,9 +367,6 @@
     <div class="form-grid">
       <div class="field"><label>Name *</label><input type="text" id="pN" placeholder="Product name"></div>
       <div class="field"><label>Price ($) *</label><input type="number" id="pPr" placeholder="0.00" step="0.01" min="0"></div>
-      <div class="field"><label>Category</label>
-        <select id="pCat"><option>Artifacts</option><option>Weapons</option><option>Apparel</option><option>Tech</option><option>Potions</option></select>
-      </div>
       <div class="field"><label>Badge</label><input type="text" id="pBd" placeholder="e.g. NEW / SALE"></div>
       <div class="field full"><label>Description *</label><textarea id="pDsc" placeholder="Describe this product…"></textarea></div>
       <div class="field full">
@@ -436,15 +426,8 @@
 const PASS='tavobarygaadmin123';
 const EMOJIS=['🗡️','⚔️','🔮','💎','🌌','🪐','⚡','🔥','💫','🌙','🛸','🧪','💀','🌀','👾','🦋','🧬','🔑','🌟','🏺','🌊','🌸','🏔️','🪄','🧿','⭐','☄️','🌈','🧲','🔓','🛡️','🐉','🌿','📦','👜','💍','🎯','🎲','🪙','🎁'];
 
-let products=[
-  {id:1,name:'Void Blade',price:299.99,category:'Weapons',emoji:'🗡️',image:'',desc:'Forged in a dying star. Cuts through any material known.',badge:'RARE'},
-  {id:2,name:'Nebula Crystal',price:149.50,category:'Artifacts',emoji:'💎',image:'',desc:'A crystallized nebula fragment. Pulsing with raw energy.',badge:'HOT'},
-  {id:3,name:'Dark Matter Cloak',price:399.00,category:'Apparel',emoji:'🌌',image:'',desc:'Woven from compressed dark matter. Near-invisible.',badge:''},
-  {id:4,name:'Stellar Vial',price:79.99,category:'Potions',emoji:'🧪',image:'',desc:'Liquefied starlight. Enhances perception tenfold.',badge:'NEW'},
-  {id:5,name:'Quantum Gauntlet',price:549.00,category:'Tech',emoji:'⚡',image:'',desc:'Harnesses quantum forces. Bends probability fields.',badge:''},
-  {id:6,name:'Eclipse Orb',price:199.00,category:'Artifacts',emoji:'🔮',image:'',desc:'A miniature solar eclipse suspended in perfect crystal.',badge:''},
-];
-let cart=[],editId=null,selEmoji='🔮',curImg='',curFilter='all';
+let products=[];
+let cart=[],editId=null,selEmoji='🔮',curImg='';
 
 function goStore(){show('storePage');}
 function goShop(){show('storePage');setTimeout(()=>document.getElementById('shopSection').scrollIntoView({behavior:'smooth'}),80);}
@@ -470,7 +453,7 @@ function renderStore(){
     </div>`).join('');
 }
 
-function doFilter(cat,btn){curFilter=cat;document.querySelectorAll('.filter-btn').forEach(b=>b.classList.remove('on'));btn.classList.add('on');renderStore();}
+
 
 function addToCart(id){
   const p=products.find(x=>x.id===id);if(!p)return;
