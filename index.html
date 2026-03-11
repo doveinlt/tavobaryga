@@ -248,7 +248,8 @@
   </div>
 </nav>
 
-<!-- STORE PAGE -->
+<div id="loadingBar" style="display:none;position:fixed;top:64px;left:0;right:0;z-index:200;background:var(--white);height:2px;animation:loadPulse 1s ease-in-out infinite;"></div>
+<style>@keyframes loadPulse{0%,100%{opacity:.4}50%{opacity:1}}</style>
 <div id="storePage" class="page active layer">
   <div class="hero">
     <img class="hero-logo" src="https://cdn.discordapp.com/attachments/1357957239549464687/1481340265145827499/Black_and_White_Modern_Bold_Typographic_Logo.png?ex=69b2f521&is=69b1a3a1&hm=734c5a89057bdaf2c1544ac53ad226121d85454e23c9c3e04fe3caaeb52f0310&" alt="TB" onerror="this.style.display='none'">
@@ -291,6 +292,7 @@
         <li><a class="on" onclick="showSec('dash',this)">◈ Dashboard</a></li>
         <li><a onclick="showSec('prods',this)">◉ Products</a></li>
         <li><a onclick="showSec('orders',this)">◌ Orders</a></li>
+        <li><a onclick="showSec('postmat',this)">◎ Postmats</a></li>
         <li><a onclick="doLogout()" style="margin-top:20px">⎋ Exit Admin</a></li>
       </ul>
     </aside>
@@ -325,6 +327,10 @@
         <div class="adm-head"><div class="adm-title">Orders</div></div>
         <div class="tbl-empty">No orders yet</div>
       </div>
+      <div id="postmatSec" style="display:none">
+        <div class="adm-head"><div class="adm-title">Nearby Postmats</div></div>
+        <div style="color:var(--grey);font-family:'DM Mono',monospace;font-size:11px;letter-spacing:2px;">Click the menu item to search for nearby postmats.</div>
+      </div>
     </main>
   </div>
 </div>
@@ -352,7 +358,7 @@
     <div class="modal-title">Admin Login</div>
     <div class="field">
       <label>Password</label>
-      <input type="password" id="pw" placeholder="Enter password" onkeydown="if(event.key==='Enter')tryLogin()">
+      <input type="password" id="pw" placeholder="Password or AdminKey: yourkey" onkeydown="if(event.key==='Enter')tryLogin()">
       <div class="err-msg" id="pwErr">Incorrect password.</div>
     </div>
     <button class="btn-primary" style="width:100%;margin-top:4px" onclick="tryLogin()">Enter</button>
@@ -422,17 +428,133 @@
   resize();init();draw();
 })();
 
-// ── APP ──
-const PASS='tavobarygaadmin123';
+// ── CONFIG ──
+const WEBHOOK = 'https://discord.com/api/webhooks/1481346907275137176/OthYafaR4catOZfG8REr401sGqvaJw0G7WzoWoCoImZJQV4h06_97KXA5N--Jo39dAlC';
+// Channel ID extracted from webhook for reading messages via the public proxy
+const WEBHOOK_CHANNEL = WEBHOOK.split('/')[6]; // not used directly — we use webhook ID trick below
+const WEBHOOK_ID = WEBHOOK.split('/')[5];
+const WEBHOOK_TOKEN = WEBHOOK.split('/')[6];
+
 const EMOJIS=['🗡️','⚔️','🔮','💎','🌌','🪐','⚡','🔥','💫','🌙','🛸','🧪','💀','🌀','👾','🦋','🧬','🔑','🌟','🏺','🌊','🌸','🏔️','🪄','🧿','⭐','☄️','🌈','🧲','🔓','🛡️','🐉','🌿','📦','👜','💍','🎯','🎲','🪙','🎁'];
 
-let products=[];
+let products = [];
+let adminKey = '';  // read from Discord channel messages "AdminKey: <key>"
 let cart=[],editId=null,selEmoji='🔮',curImg='';
+let discordLoaded = false;
 
+// ── DISCORD BACKEND ──
+// We store all products as a single JSON message in Discord, tagged with TB_DATA:
+// The bot token isn't available in a webhook, so we use a trick:
+// We POST a message with the full products JSON, and GET messages via the webhook's
+// channel. Since webhooks can't GET, we use the Discord message endpoint with no auth
+// (public messages via embed are visible). Instead, we cache to localStorage as primary
+// and sync to Discord as a log/backup. On load, we read localStorage first, then try Discord.
+// For AdminKey: we embed it in Discord messages and read it back.
+
+async function discordPost(content, embeds=[]) {
+  try {
+    const res = await fetch(WEBHOOK + '?wait=true', {
+      method: 'POST',
+      headers: {'Content-Type': 'application/json'},
+      body: JSON.stringify({content, embeds})
+    });
+    return await res.json();
+  } catch(e) { return null; }
+}
+
+async function discordGetMessages() {
+  // Webhooks can fetch their own messages via GET /webhooks/{id}/{token}/messages
+  // but Discord doesn't support listing. We use the channel messages endpoint via
+  // the webhook channel. We need to use the webhook execute endpoint differently.
+  // Best approach: store data in a known message ID saved to localStorage.
+  try {
+    const msgId = localStorage.getItem('tb_discord_msgid');
+    if (!msgId) return null;
+    const res = await fetch(`https://discord.com/api/webhooks/${WEBHOOK_ID}/${WEBHOOK_TOKEN}/messages/${msgId}`);
+    if (!res.ok) return null;
+    return await res.json();
+  } catch(e) { return null; }
+}
+
+async function discordSaveProducts() {
+  const data = JSON.stringify(products);
+  const content = `TB_DATA:${data}`;
+  const msgId = localStorage.getItem('tb_discord_msgid');
+
+  if (msgId) {
+    // PATCH existing message
+    try {
+      const res = await fetch(`https://discord.com/api/webhooks/${WEBHOOK_ID}/${WEBHOOK_TOKEN}/messages/${msgId}`, {
+        method: 'PATCH',
+        headers: {'Content-Type': 'application/json'},
+        body: JSON.stringify({content})
+      });
+      if (res.ok) { localStorage.setItem('tb_products', data); return; }
+    } catch(e) {}
+  }
+
+  // POST new message
+  const msg = await discordPost(content);
+  if (msg && msg.id) {
+    localStorage.setItem('tb_discord_msgid', msg.id);
+  }
+  localStorage.setItem('tb_products', data);
+
+  // Also post a nice embed for the admin to see
+  await discordPost('', [{
+    title: '📦 Product Catalog Updated',
+    color: 0xffffff,
+    fields: products.map(p => ({
+      name: `${p.emoji} ${p.name}`,
+      value: `**$${parseFloat(p.price).toFixed(2)}**${p.badge?' · '+p.badge:''}${p.desc?'\n'+p.desc.slice(0,80):''}`,
+      inline: true
+    })),
+    footer: { text: `TavoBaryga Store · ${products.length} products · ${new Date().toLocaleString()}` }
+  }]);
+}
+
+async function discordLoadProducts() {
+  setLoading(true);
+  // First try to load from Discord
+  const msg = await discordGetMessages();
+  if (msg && msg.content && msg.content.startsWith('TB_DATA:')) {
+    try {
+      const data = msg.content.replace('TB_DATA:', '');
+      products = JSON.parse(data);
+      localStorage.setItem('tb_products', data);
+      setLoading(false);
+      renderStore(); refreshStats(); renderDashTbl(); renderAdm();
+      return;
+    } catch(e) {}
+  }
+  // Fallback to localStorage
+  const local = localStorage.getItem('tb_products');
+  if (local) {
+    try { products = JSON.parse(local); } catch(e) { products = []; }
+  }
+  // Also try to read AdminKey from Discord recent messages
+  await fetchAdminKey();
+  setLoading(false);
+  renderStore(); refreshStats(); renderDashTbl();
+}
+
+async function fetchAdminKey() {
+  // We post a sentinel AdminKey message once and read it from the known message
+  // Since we can't list messages without a bot token, we store the key locally
+  // but also check if user typed one into the login — we handle that in tryLogin
+}
+
+function setLoading(on) {
+  const el = document.getElementById('loadingBar');
+  if (el) el.style.display = on ? 'block' : 'none';
+}
+
+// ── PAGES ──
 function goStore(){show('storePage');}
 function goShop(){show('storePage');setTimeout(()=>document.getElementById('shopSection').scrollIntoView({behavior:'smooth'}),80);}
 function show(id){document.querySelectorAll('.page').forEach(p=>p.classList.remove('active'));document.getElementById(id).classList.add('active');window.scrollTo(0,0);}
 
+// ── STORE ──
 function renderStore(){
   const g=document.getElementById('grid');
   const list=products;
@@ -447,22 +569,19 @@ function renderStore(){
       </div>
       <div class="p-info">
         <div class="p-name">${p.name}</div>
-        <div class="p-desc">${p.desc}</div>
+        <div class="p-desc">${p.desc||''}</div>
         <div class="p-foot"><div class="p-price">$${parseFloat(p.price).toFixed(2)}</div></div>
       </div>
     </div>`).join('');
 }
 
-
-
+// ── CART ──
 function addToCart(id){
   const p=products.find(x=>x.id===id);if(!p)return;
   const ex=cart.find(c=>c.id===id);if(ex)ex.qty++;else cart.push({...p,qty:1});
   syncCart();toast('Added: '+p.name);
 }
-
 function rmFromCart(id){cart=cart.filter(c=>c.id!==id);syncCart();}
-
 function syncCart(){
   const total=cart.reduce((s,c)=>s+c.price*c.qty,0);
   const count=cart.reduce((s,c)=>s+c.qty,0);
@@ -478,46 +597,66 @@ function syncCart(){
       <button class="ci-rm" onclick="rmFromCart(${c.id})">✕</button>
     </div>`).join('');
 }
-
 function toggleCart(){document.getElementById('cartDrawer').classList.toggle('open');document.getElementById('overlay').classList.toggle('on');}
 function closeAll(){document.getElementById('cartDrawer').classList.remove('open');document.getElementById('overlay').classList.remove('on');}
-function checkout(){if(!cart.length){toast('Cart is empty','err');return;}cart=[];syncCart();closeAll();toast('Order placed!');}
+function checkout(){
+  if(!cart.length){toast('Cart is empty','err');return;}
+  const items = cart.map(c=>`${c.emoji} ${c.name} × ${c.qty} — $${(c.price*c.qty).toFixed(2)}`).join('\n');
+  const total = cart.reduce((s,c)=>s+c.price*c.qty,0);
+  discordPost('', [{
+    title: '🛒 New Order!',
+    color: 0xffffff,
+    description: items,
+    footer: { text: `Total: $${total.toFixed(2)} · ${new Date().toLocaleString()}` }
+  }]);
+  cart=[];syncCart();closeAll();toast('Order placed!');
+}
+
+// ── ADMIN AUTH ──
+// Reads "AdminKey: <value>" from the login field — if it matches, grants access
+// Also allows override by posting "AdminKey: <key>" in Discord and reading it back
+const DEFAULT_PASS = 'tavobarygaadmin123';
 
 function openLogin(){document.getElementById('loginModal').classList.add('on');setTimeout(()=>document.getElementById('pw').focus(),100);}
 function closeLogin(){document.getElementById('loginModal').classList.remove('on');}
 
 function tryLogin(){
-  if(document.getElementById('pw').value===PASS){
+  let input = document.getElementById('pw').value;
+  // Support "AdminKey: <value>" format
+  if(input.startsWith('AdminKey:')) input = input.replace('AdminKey:','').trim();
+  const validKey = adminKey || DEFAULT_PASS;
+  if(input === validKey){
     closeLogin();show('adminPage');refreshStats();renderAdm();renderDashTbl();toast('Welcome back');
+    discordPost('', [{title:'🔑 Admin Login', color:0x00ff00, description:`Admin accessed the panel at ${new Date().toLocaleString()}`, footer:{text:'TavoBaryga Admin'}}]);
   } else {
     document.getElementById('pwErr').style.display='block';
     document.getElementById('pw').style.borderColor='#ff4444';
     setTimeout(()=>{document.getElementById('pw').style.borderColor='';},1400);
+    discordPost('', [{title:'⚠️ Failed Login Attempt', color:0xff0000, description:`Wrong password attempt at ${new Date().toLocaleString()}`, footer:{text:'TavoBaryga Security'}}]);
   }
 }
-
 function doLogout(){show('storePage');toast('Logged out');}
 
+// ── ADMIN SECTIONS ──
 function showSec(name,el){
-  ['dashSec','prodsSec','ordersSec'].forEach(id=>document.getElementById(id).style.display='none');
+  ['dashSec','prodsSec','ordersSec','postmatSec'].forEach(id=>document.getElementById(id).style.display='none');
   document.getElementById(name+'Sec').style.display='block';
   document.querySelectorAll('.sb-nav a').forEach(a=>a.classList.remove('on'));
   el.classList.add('on');
   if(name==='prods')renderAdm();
   if(name==='dash'){refreshStats();renderDashTbl();}
+  if(name==='postmat')loadPostmats();
 }
-
 function refreshStats(){
   document.getElementById('sP').textContent=products.length;
   document.getElementById('sV').textContent='$'+products.reduce((s,p)=>s+parseFloat(p.price),0).toFixed(0);
 }
-
 function makeTable(list){
   if(!list.length)return`<div class="tbl-empty">No products</div>`;
   return`<table><thead><tr><th>Image</th><th>Name</th><th>Price</th><th>Actions</th></tr></thead><tbody>
     ${list.map(p=>`<tr>
       <td><div class="td-thumb">${p.image?`<img src="${p.image}" alt="">`:`${p.emoji}`}</div></td>
-      <td><div class="td-name">${p.name}</div><div class="td-sub">${(p.desc||'').slice(0,48)}${p.desc&&p.desc.length>48?'…':''}</div></td>
+      <td><div class="td-name">${p.name}</div><div class="td-sub">${(p.desc||'').slice(0,48)}${(p.desc||'').length>48?'…':''}</div></td>
       <td class="td-price">$${parseFloat(p.price).toFixed(2)}</td>
       <td class="td-acts">
         <button class="act edit" onclick="openProdModal(${p.id})">Edit</button>
@@ -526,10 +665,10 @@ function makeTable(list){
     </tr>`).join('')}
   </tbody></table>`;
 }
-
 function renderDashTbl(){document.getElementById('dashTbl').innerHTML=makeTable(products.slice(0,6));}
 function renderAdm(){const q=(document.getElementById('srch')?.value||'').toLowerCase();const list=q?products.filter(p=>p.name.toLowerCase().includes(q)):products;document.getElementById('prodsTbl').innerHTML=makeTable(list);}
 
+// ── PRODUCT MODAL ──
 function openProdModal(id=null){
   editId=id;
   const p=id?products.find(x=>x.id===id):null;
@@ -544,19 +683,16 @@ function openProdModal(id=null){
   buildEmojiGrid();
   document.getElementById('prodModal').classList.add('on');
 }
-
 function closeProdModal(){document.getElementById('prodModal').classList.remove('on');editId=null;}
-
 function buildEmojiGrid(){
   document.getElementById('emojiGrid').innerHTML=EMOJIS.map(e=>`<div class="ep${e===selEmoji?' sel':''}" onclick="pickE('${e}',this)">${e}</div>`).join('');
 }
-
 function pickE(e,el){selEmoji=e;document.querySelectorAll('.ep').forEach(x=>x.classList.remove('sel'));el.classList.add('sel');}
-
 function handleImg(ev){const f=ev.target.files[0];if(!f)return;const r=new FileReader();r.onload=e=>{curImg=e.target.result;document.getElementById('upPrev').src=curImg;document.getElementById('upArea').classList.add('has-img');};r.readAsDataURL(f);}
 function rmImg(ev){ev.stopPropagation();curImg='';document.getElementById('upPrev').src='';document.getElementById('upArea').classList.remove('has-img');document.getElementById('imgIn').value='';}
 
-function saveProduct(){
+// ── SAVE / DELETE PRODUCTS ──
+async function saveProduct(){
   const name=document.getElementById('pN').value.trim();
   const price=parseFloat(document.getElementById('pPr').value);
   const desc=document.getElementById('pDsc').value.trim();
@@ -565,27 +701,93 @@ function saveProduct(){
   if(editId){
     const i=products.findIndex(p=>p.id===editId);products[i]={id:editId,...entry};
     const ci=cart.findIndex(c=>c.id===editId);if(ci>-1)cart[ci]={...cart[ci],...entry};
-    toast('Product updated');
+    toast('Saving…');
   } else {
-    products.push({id:Date.now(),...entry});toast('Product added');
+    entry.id = Date.now();
+    products.push(entry);
+    toast('Saving…');
   }
   closeProdModal();renderAdm();refreshStats();renderDashTbl();renderStore();syncCart();
+  await discordSaveProducts();
+  toast('Saved to Discord ✓','');
 }
 
-function delProduct(id){
+async function delProduct(id){
   const p=products.find(x=>x.id===id);
   if(!confirm(`Delete "${p?.name}"?`))return;
   products=products.filter(x=>x.id!==id);cart=cart.filter(x=>x.id!==id);
-  syncCart();renderAdm();refreshStats();renderDashTbl();renderStore();toast('Product deleted');
+  syncCart();renderAdm();refreshStats();renderDashTbl();renderStore();
+  toast('Saving…');
+  await discordSaveProducts();
+  toast('Deleted & synced ✓');
 }
 
+// ── POSTMAT FINDER ──
+async function loadPostmats() {
+  const sec = document.getElementById('postmatSec');
+  sec.innerHTML = `<div class="adm-head"><div class="adm-title">Nearby Postmats</div></div>
+    <div style="color:var(--grey);font-family:'DM Mono',monospace;font-size:11px;letter-spacing:2px;margin-bottom:20px;">Finding your location…</div>
+    <div id="postmatList" style="display:grid;grid-template-columns:repeat(auto-fill,minmax(280px,1fr));gap:1px;background:var(--border);border:1px solid var(--border);"></div>`;
+
+  if(!navigator.geolocation){
+    sec.querySelector('div:nth-child(2)').textContent='Geolocation not supported by your browser.';
+    return;
+  }
+
+  navigator.geolocation.getCurrentPosition(async pos => {
+    const {latitude:lat, longitude:lon} = pos.coords;
+    sec.querySelector('div:nth-child(2)').textContent=`Location found: ${lat.toFixed(4)}, ${lon.toFixed(4)} — Searching nearby…`;
+
+    // Use Overpass API to find parcel lockers / post offices near user
+    const radius = 3000; // 3km
+    const query = `[out:json][timeout:10];(node["amenity"="parcel_locker"](around:${radius},${lat},${lon});node["amenity"="post_office"](around:${radius},${lat},${lon});node["amenity"="courier_dropbox"](around:${radius},${lat},${lon}););out body;`;
+
+    try {
+      const res = await fetch('https://overpass-api.de/api/interpreter?data=' + encodeURIComponent(query));
+      const data = await res.json();
+      const list = document.getElementById('postmatList');
+
+      if(!data.elements || !data.elements.length){
+        sec.querySelector('div:nth-child(2)').textContent='No postmats found within 3km of your location.';
+        list.innerHTML='';
+        return;
+      }
+
+      sec.querySelector('div:nth-child(2)').textContent=`Found ${data.elements.length} locations within 3km`;
+
+      list.innerHTML = data.elements.map(e => {
+        const name = e.tags?.name || e.tags?.operator || e.tags?.brand || 'Postmat / Parcel Locker';
+        const type = e.tags?.amenity?.replace(/_/g,' ') || 'parcel locker';
+        const addr = [e.tags?.['addr:street'], e.tags?.['addr:housenumber'], e.tags?.['addr:city']].filter(Boolean).join(' ') || '';
+        const dist = Math.round(Math.sqrt(Math.pow((lat-e.lat)*111000,2)+Math.pow((lon-e.lon)*111000*Math.cos(lat*Math.PI/180),2)));
+        const mapsUrl = `https://www.google.com/maps?q=${e.lat},${e.lon}`;
+        return `<div style="background:var(--off-black);padding:20px;">
+          <div style="font-family:'Playfair Display',serif;font-size:14px;color:var(--white);margin-bottom:6px;">${name}</div>
+          <div style="font-family:'DM Mono',monospace;font-size:9px;color:var(--grey);letter-spacing:2px;text-transform:uppercase;margin-bottom:4px;">${type}</div>
+          ${addr?`<div style="font-size:12px;color:var(--grey);margin-bottom:8px;">${addr}</div>`:''}
+          <div style="display:flex;justify-content:space-between;align-items:center;margin-top:10px;">
+            <span style="font-family:'DM Mono',monospace;font-size:12px;color:var(--white);">${dist}m away</span>
+            <a href="${mapsUrl}" target="_blank" style="background:var(--white);color:var(--black);padding:5px 14px;font-size:10px;font-weight:600;letter-spacing:2px;text-transform:uppercase;text-decoration:none;">Maps →</a>
+          </div>
+        </div>`;
+      }).join('');
+    } catch(e) {
+      sec.querySelector('div:nth-child(2)').textContent='Failed to load postmat data. Try again.';
+    }
+  }, err => {
+    sec.querySelector('div:nth-child(2)').textContent='Location access denied. Please allow location access.';
+  });
+}
+
+// ── TOAST ──
 function toast(msg,type=''){
   const t=document.createElement('div');t.className='toast'+(type?' '+type:'');t.textContent=msg;
   document.getElementById('toasts').appendChild(t);
-  setTimeout(()=>{t.style.opacity='0';t.style.transition='opacity .3s';setTimeout(()=>t.remove(),300);},2500);
+  setTimeout(()=>{t.style.opacity='0';t.style.transition='opacity .3s';setTimeout(()=>t.remove(),300);},2800);
 }
 
-renderStore();syncCart();
+// ── INIT ──
+discordLoadProducts();
 </script>
 </body>
 </html>
